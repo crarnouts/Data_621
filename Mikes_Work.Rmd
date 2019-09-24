@@ -1,0 +1,323 @@
+---
+title: "Exploratory Data Analysis"
+author: "Critical Thinking Group 3"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::readthedown:
+    highlight: kate
+    toc_depth: 3
+  html_document:
+    df_print: paged
+    toc_depth: '3'
+---
+
+
+```{r knitr_init, echo=FALSE, cache=FALSE, message=FALSE}
+library(knitr)
+library(rmdformats)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(kableExtra)
+library(RColorBrewer)
+## Global options
+options(max.print="75")
+opts_chunk$set(echo=FALSE,
+	             cache=FALSE,
+               prompt=FALSE,
+               tidy=TRUE,
+               comment=NA,
+               message=FALSE,
+               warning=FALSE)
+opts_knit$set(width=75)
+```
+
+```{r read_data}
+training <- read.csv("https://raw.githubusercontent.com/mikeasilva/data-621-group-projects/master/hw1/data/moneyball-training-data.csv") %>%
+  #select(-TEAM_BATTING_HBP, -INDEX) %>%
+  mutate(TEAM_BATTING_S = TEAM_BATTING_H + TEAM_BATTING_2B + TEAM_BATTING_3B + TEAM_BATTING_HR)
+```
+
+## Scatter Plots
+
+```{r small_multiples_scatter, warning=FALSE}
+training %>%
+  gather(variable, value, TEAM_BATTING_H:TEAM_BATTING_S) %>%
+  ggplot(., aes(TARGET_WINS, value)) + 
+  geom_point(fill = "indianred4", color="indianred4") + 
+  facet_wrap(~variable, scales ="free", ncol = 4) +
+  labs(x = element_blank(), y = "Wins")
+```
+
+
+```{r}
+training %>%
+  summary() %>%
+  kable() %>%
+  kable_styling()
+```
+
+## Distribution Plots
+
+```{r small_multiples_density, warning=FALSE}
+training %>%
+  gather(variable, value, TARGET_WINS:TEAM_BATTING_S) %>%
+  ggplot(., aes(value)) + 
+  geom_density(fill = "indianred4", color="indianred4") + 
+  facet_wrap(~variable, scales ="free", ncol = 4) +
+  labs(x = element_blank(), y = element_blank())
+```
+
+## Preprocessing
+
+### Data Transformations
+
+```{r}
+transformations <- function(df){
+  right_skewed_variables <- c("TEAM_BASERUN_CS", "TEAM_BASERUN_SB", "TEAM_BATTING_3B")
+  for(v in right_skewed_variables){
+    print(paste("Taking the square root of", v, "to adjust right skew"))
+    # Apply a square root transformation
+    training[[v]] <- sqrt(training[[v]])
+  }
+  df
+}
+training <- training %>% transformations()
+```
+
+```{r small_multiples_transformed_density, warning=FALSE}
+training %>%
+  gather(variable, value, TARGET_WINS:TEAM_BATTING_S) %>%
+  ggplot(., aes(value)) + 
+  geom_density(fill = "indianred4", color="indianred4") + 
+  facet_wrap(~variable, scales ="free", ncol = 4) +
+  labs(x = element_blank(), y = element_blank())
+```
+
+```{r}
+training %>%
+  summary() %>%
+  kable() %>%
+  kable_styling()
+```
+
+### Remove Outliers
+
+```{r}
+predictors <- training %>% select(-TARGET_WINS, -INDEX) %>% names()
+for(v in predictors){
+    outliers <- boxplot(training[[v]], plot = FALSE)$out
+    if(length(outliers) > 0){
+      if(!exists("the_outliers")){
+        the_outliers <- training[which(training[[v]] %in% outliers),]
+      } else {
+        the_outliers <- rbind(the_outliers, training[which(training[[v]] %in% outliers),])
+      }
+      training <- training[-which(training[[v]] %in% outliers),]
+      print(paste("Removing", length(outliers), v, "outliers"))
+    }
+}
+```
+
+```{r small_multiples_outliers_removed, warning=FALSE}
+training %>%
+  gather(variable, value, TARGET_WINS:TEAM_BATTING_S) %>%
+  ggplot(., aes(value)) + 
+  geom_density(fill = "indianred4", color="indianred4") + 
+  facet_wrap(~variable, scales ="free", ncol = 4) +
+  labs(x = element_blank(), y = element_blank())
+```
+
+```{r}
+training %>%
+  summary() %>%
+  kable() %>%
+  kable_styling()
+```
+
+
+```{r}
+adjust_by_a_factor_of <- .1
+adjust_by <- c()
+adjust_by_names <- c()
+for (v in names(training)[2:16]){
+  temp <- median((training[[v]] * adjust_by_a_factor_of) / training$TARGET_WINS, na.rm = TRUE)
+  adjust_by <- append(adjust_by, temp)
+  adjust_by_names <- append(adjust_by_names, v)
+}
+names(adjust_by) <- adjust_by_names
+```
+
+
+
+```{r small_multiples_adjusted_scatter, warning=FALSE}
+training %>%
+  gather(variable, value, TEAM_BATTING_H:TEAM_BATTING_S) %>%
+  ggplot(., aes(TARGET_WINS, value)) + 
+  geom_point(fill = "indianred4", color="indianred4") + 
+  facet_wrap(~variable, scales ="free", ncol = 4) +
+  labs(x = element_blank(), y = "Wins")
+```
+
+
+## Interesting
+
+Groups emerged from the predictors:
+
+```{r}
+training <- training %>%
+  mutate(H_RATIO = TEAM_BATTING_H / TEAM_PITCHING_H,
+         H_GROUP = ifelse(H_RATIO > 0.98, "A", "B")) %>%
+  mutate(H_GROUP = ifelse(H_RATIO < 0.9, "C", H_GROUP)) %>%
+  mutate(H_GROUP = ifelse(H_RATIO < 0.87, "D", H_GROUP)) %>%
+   mutate(H_GROUP = ifelse(H_RATIO < 0.8, "E", H_GROUP)) %>%
+  mutate(H_GROUP = as.factor(H_GROUP))
+training %>%
+  ggplot(., aes(TEAM_BATTING_H, TEAM_PITCHING_H, color = H_GROUP)) +
+  geom_point() +
+  scale_color_brewer(palette = "Set1")
+```
+
+They don't have much meaning though
+
+```{r}
+ggplot(training, aes(H_RATIO, TARGET_WINS, color = H_GROUP)) + 
+  geom_point() +
+  scale_color_brewer(palette = "Set1")
+ggplot(training, aes(TEAM_BATTING_H, TARGET_WINS, color = H_GROUP)) + 
+  geom_point() +
+  scale_color_brewer(palette = "Set1")
+ggplot(training, aes(TEAM_PITCHING_H, TARGET_WINS, color = H_GROUP)) + 
+  geom_point() +
+  scale_color_brewer(palette = "Set1")
+```
+
+This one is not very useful either
+
+```{r}
+training <- training %>%
+  mutate(BB_RATIO = TEAM_BATTING_BB / TEAM_PITCHING_BB,
+         BB_GROUP = ifelse(BB_RATIO > 0.98, "A", "B")) %>%
+  mutate(BB_GROUP = ifelse(BB_RATIO < 0.9, "C", BB_GROUP)) %>%
+  mutate(BB_GROUP = ifelse(BB_RATIO < 0.8, "D", BB_GROUP)) %>%
+  mutate(BB_GROUP = ifelse(BB_RATIO < 0.7, "E", BB_GROUP)) %>%
+  mutate(BB_GROUP = as.factor(BB_GROUP))
+training %>%
+  ggplot(., aes(TEAM_BATTING_BB, TEAM_PITCHING_BB, color = BB_GROUP)) +
+  geom_point() +
+  scale_color_brewer(palette = "Set1")
+ggplot(training, aes(TEAM_BATTING_BB, TARGET_WINS, color = BB_GROUP)) + 
+  geom_point() +
+  scale_color_brewer(palette = "Set1")
+ggplot(training, aes(TEAM_PITCHING_BB, TARGET_WINS, color = BB_GROUP)) + 
+  geom_point() +
+  scale_color_brewer(palette = "Set1")
+ggplot(training, aes(BB_RATIO, TARGET_WINS, color = BB_GROUP)) + 
+  geom_point() +
+  scale_color_brewer(palette = "Set1")
+```
+
+Same story with this one
+
+```{r}
+training <- training %>%
+  mutate(HR_RATIO = TEAM_BATTING_HR / TEAM_PITCHING_HR,
+         HR_GROUP = ifelse(HR_RATIO > 0.97, "A", "B")) %>%
+  mutate(HR_GROUP = ifelse(HR_RATIO < 0.91, "C", HR_GROUP)) %>%
+  mutate(HR_GROUP = ifelse(HR_RATIO < 0.83, "D", HR_GROUP)) %>%
+  mutate(HR_GROUP = ifelse(HR_RATIO < 0.7, "E", HR_GROUP)) %>%  
+  mutate(HR_GROUP = as.factor(HR_GROUP))
+training %>%
+  ggplot(., aes(TEAM_BATTING_BB, TEAM_PITCHING_BB, color = HR_GROUP)) +
+  geom_point() +
+  scale_color_brewer(palette = "Set1")
+ggplot(training, aes(TEAM_PITCHING_BB, TARGET_WINS, color = HR_GROUP)) + 
+  geom_point() +
+  scale_color_brewer(palette = "Set1")
+ggplot(training, aes(HR_RATIO, TARGET_WINS, color = HR_GROUP)) + 
+  geom_point() +
+  scale_color_brewer(palette = "Set1")
+```
+
+But this one is very interesting because it seperates the bimodal distribution.
+
+```{r}
+training <- training %>%
+  mutate(SO_RATIO = TEAM_BATTING_SO / TEAM_PITCHING_SO,
+         SO_GROUP = ifelse(SO_RATIO > 0.98, "A", "B")) %>%
+  mutate(SO_GROUP = ifelse(SO_RATIO < 0.9, "C", SO_GROUP)) %>%
+  mutate(SO_GROUP = ifelse(SO_RATIO < 0.88, "D", SO_GROUP)) %>%
+  mutate(SO_GROUP = ifelse(SO_RATIO < 0.8, "E", SO_GROUP)) %>%
+  mutate(SO_GROUP = as.factor(SO_GROUP))
+training %>%
+  ggplot(., aes(TEAM_BATTING_H, TEAM_PITCHING_H, color = SO_GROUP)) +
+  geom_point() +
+  scale_color_brewer(palette = "Set1")
+ggplot(training, aes(TEAM_BATTING_SO, TARGET_WINS, color = SO_GROUP)) + 
+  geom_point() +
+  scale_color_brewer(palette = "Set1")
+ggplot(training, aes(TEAM_PITCHING_SO, TARGET_WINS, color = SO_GROUP)) + 
+  geom_point() +
+  scale_color_brewer(palette = "Set1")
+ggplot(training, aes(TEAM_BATTING_SO, color = SO_GROUP)) + 
+  geom_density() +
+  scale_color_brewer(palette = "Set1")
+ggplot(training, aes(TEAM_PITCHING_SO, color = SO_GROUP)) + 
+  geom_density() +
+  scale_color_brewer(palette = "Set1")
+ggplot(training, aes(SO_RATIO, TARGET_WINS, color = SO_GROUP)) + 
+  geom_point() +
+  scale_color_brewer(palette = "Set1")
+```
+
+This only happens after the outliers are pulled out.
+
+
+## Feature Engineering
+
+```{r}
+training <- training %>%
+  mutate(TEAM_PITCHING_SO_PER_BB = TEAM_PITCHING_SO / TEAM_PITCHING_BB)
+ggplot(training, aes(TEAM_PITCHING_SO_PER_BB, TARGET_WINS, color=SO_GROUP)) + 
+  geom_point() +
+  geom_smooth(method = "lm") +
+  facet_wrap(~SO_GROUP, scales ="free") +
+  theme(legend.position = "None") +
+  scale_color_brewer(palette = "Set1") + 
+  ggtitle("Wins vs Strikeouts per Walk (Pitching)")
+```
+
+```{r}
+training <- training %>%
+  mutate(AT_BAT = TEAM_BATTING_H + TEAM_BATTING_BB + TEAM_BATTING_SO) %>%
+  mutate(TEAM_BATTING_HR_RATE = TEAM_BATTING_HR / AT_BAT) %>%
+  mutate(TEAM_BATTING_H_RATE = TEAM_BATTING_H / AT_BAT)
+ggplot(training, aes(TEAM_BATTING_HR, TARGET_WINS, color= HR_GROUP)) + 
+  geom_point() +
+  geom_smooth(method = "lm") +
+  facet_wrap(~HR_GROUP, scales ="free") +
+  theme(legend.position = "None") +
+  scale_color_brewer(palette = "Set1") + 
+  ggtitle("Home Run Rate")
+ggplot(training, aes(TEAM_BATTING_H_RATE, TARGET_WINS, color= H_GROUP)) + 
+  geom_point() +
+  geom_smooth(method = "lm") +
+  facet_wrap(~H_GROUP, scales ="free") +
+  theme(legend.position = "None") +
+  scale_color_brewer(palette = "Set1") + 
+  ggtitle("Batting Hit Rate")
+```
+
+
+```{r}
+training <- training %>%
+  mutate(PITCHES = TEAM_PITCHING_H + TEAM_PITCHING_BB + TEAM_PITCHING_SO) %>%
+  mutate(TEAM_PITCHING_SO_RATE = TEAM_PITCHING_SO / PITCHES)
+ggplot(training, aes(TEAM_PITCHING_SO_RATE, TARGET_WINS, color= SO_GROUP)) + 
+  geom_point() +
+  geom_smooth(method = "lm") +
+  scale_color_brewer(palette = "Set1") + 
+  facet_wrap(~SO_GROUP, scales ="free") +
+  theme(legend.position = "None") +
+  ggtitle("Strike Outs Pitched Rate")
+```
